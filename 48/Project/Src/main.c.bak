@@ -1,0 +1,736 @@
+
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  ** This notice applies to any and all portions of this file
+  * that are not between comment pairs USER CODE BEGIN and
+  * USER CODE END. Other portions of this file, whether 
+  * inserted by the user or by software development tools
+  * are owned by their respective copyright owners.
+  *
+  * COPYRIGHT(c) 2020 STMicroelectronics
+  *
+  * Redistribution and use in source and binary forms, with or without modification,
+  * are permitted provided that the following conditions are met:
+  *   1. Redistributions of source code must retain the above copyright notice,
+  *      this list of conditions and the following disclaimer.
+  *   2. Redistributions in binary form must reproduce the above copyright notice,
+  *      this list of conditions and the following disclaimer in the documentation
+  *      and/or other materials provided with the distribution.
+  *   3. Neither the name of STMicroelectronics nor the names of its contributors
+  *      may be used to endorse or promote products derived from this software
+  *      without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  ******************************************************************************
+  */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "stm32l0xx_hal.h"
+#include "adc.h"
+#include "rtc.h"
+#include "tim.h"
+#include "gpio.h"
+
+/* USER CODE BEGIN Includes */
+RTC_TimeTypeDef sTime;
+RTC_DateTypeDef sDate;
+extern ADC_HandleTypeDef hadc;
+/* USER CODE END Includes */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+/* Private variables ---------------------------------------------------------*/
+
+uint8_t hour = 0;
+uint8_t min = 0;
+uint8_t sec = 0;
+uint8_t mode=0,before_mode=10;
+uint16_t ain[4]={0,0,0,0},status;
+uint16_t rpm=0,rpm_val=0;
+_Bool flag=0,flag_buttom[2];
+int pwm=0;
+char st[21];
+uint32_t tick[10];
+char sr[9][10]={"  CENTER  ",
+								"    UP    ",
+								" RIGHT_UP ",
+								"  RIGHT   ",
+								"RIGHT_DOWN",
+								"   DOWN   ",
+								"LEFT_DOWN ",
+								"   LEFT   ",
+								" LEFT_UP  "};
+uint8_t row[8]={0x06,0x66,0x60,0x63,0x03,0x33,0x30,0x36};
+uint8_t all[2]={0,0},before_status;
+int count[5];
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+
+/* USER CODE BEGIN PFP */
+/* Private function prototypes -----------------------------------------------*/
+void Set_BCD_Hour(char);
+void Set_BCD_Min(char);
+void Set_BCD_Sec(char);
+char Get_BCD_Hour(void);
+char Get_BCD_Min(void);
+char Get_BCD_Sec(void);
+
+void task();
+void adc_read()
+{
+	for(uint8_t i=0;i<4;i++)
+	{
+		HAL_ADC_Start(&hadc);
+		HAL_ADC_PollForConversion(&hadc,10);
+		ain[i]=HAL_ADC_GetValue(&hadc);
+	}
+	HAL_ADC_Stop(&hadc);
+	
+	status=0;
+	if(ain[0]>3800)
+		status|=0x60;
+	else if(ain[0]<500)
+		status|=0x30;
+	if(ain[1]>3800)
+		status|=0x06;
+	else if(ain[1]<500)
+		status|=0x03;
+}
+void pwm_contron()
+{
+	adc_read();
+	if(ain[0]>4000)
+	{
+		pwm++;
+	}
+	else if(ain[0]<1000)
+	{
+		pwm--;
+	}
+	if(ain[1]>4000)
+	{
+		pwm+=5;
+	}
+	else if(ain[1]<1000)
+	{
+		pwm-=5;
+	}
+	if(pwm>100) pwm=100;
+	if(pwm<0) pwm=0;
+	TIM22->CCR1=pwm;
+	sprintf(st,"PWM1: %3d  [%%]       ",pwm);
+	OLED_ShowRomString(1,st);
+}
+void rpm_count()
+{
+	if(HAL_GetTick()-tick[1]<1000)
+	{
+		if(!flag&&HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_2))
+		{
+			rpm++;
+			flag=1;
+		}
+		else if(flag&&!HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_2))
+		{
+			flag=0;
+		}
+	}
+	else
+	{
+		tick[1]=HAL_GetTick();
+		if(pwm<1)
+		{
+			sprintf(st,"RPM:  %4d [RPM]     ",0);
+			OLED_ShowRomString(2, st);
+			sprintf(st,"Rate:    0 [RPM/PWM]");
+			OLED_ShowRomString(3, st);
+		}
+		else
+		{
+			sprintf(st,"RPM:  %4d [RPM]     ",rpm_val*30);
+			OLED_ShowRomString(2, st);
+			sprintf(st,"Rate:  %4d [RPM/PWM]",rpm_val*30/pwm);
+			OLED_ShowRomString(3, st);
+		}
+		rpm_val=rpm;
+		rpm=0;
+		flag=0;
+	}
+}
+void relay_contron()
+{
+	if(!HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_10))
+	{
+		flag_buttom[0]=!flag_buttom[0];
+		if(flag_buttom[0])
+			OLED_ShowRomString(6, "Relay1: ON           ");
+		else 
+			OLED_ShowRomString(6, "Relay1: OFF          ");
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0,flag_buttom[0]);
+		while(!HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_10));
+		HAL_Delay(50);
+	}
+	if(!HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_9))
+	{
+		flag_buttom[1]=!flag_buttom[1];
+		if(flag_buttom[1])
+			OLED_ShowRomString(7, "Relay2: ON           ");
+		else 
+			OLED_ShowRomString(7, "Relay2: OFF          ");
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_1,flag_buttom[1]);
+		while(!HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_9));
+		HAL_Delay(50);
+	}
+}
+void led_1()
+{
+	HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_2));
+}
+void rtc_get()
+{
+	HAL_RTC_GetTime(&hrtc,&sTime,FORMAT_BIN);
+	HAL_RTC_GetDate(&hrtc,&sDate,FORMAT_BIN);
+}
+void rtc_show()
+{
+	char ch;
+	rtc_get();
+	OLED_Start_Page_PageAddressing(0);
+	OLED_Start_Column_PageAddressing(0);
+	
+	ch=sTime.Hours/10+'0';
+	OLED_ShowRomChar(ch);
+	ch=sTime.Hours%10+'0';
+	OLED_ShowRomChar(ch);
+	
+	OLED_ShowRomChar(':');
+	
+	ch=sTime.Minutes/10+'0';
+	OLED_ShowRomChar(ch);
+	ch=sTime.Minutes%10+'0';
+	OLED_ShowRomChar(ch);
+	
+	OLED_ShowRomChar(':');
+	
+	ch=sTime.Seconds/10+'0';
+	OLED_ShowRomChar(ch);
+	ch=sTime.Seconds%10+'0';
+	OLED_ShowRomChar(ch);
+	
+}
+void status_con(uint8_t choose)
+{
+	OLED_Start_Page_PageAddressing(1);
+	OLED_Start_Column_PageAddressing(0);
+	
+	for(uint8_t i=0;i<10;i++)
+	{
+		OLED_ShowRomChar(sr[choose][i]);
+	}
+}
+void status_show()
+{
+	adc_read();
+	switch(status)
+	{
+		case 0x06:
+			status_con(1);
+		break;
+		case 0x66:
+			status_con(2);
+		break;
+		case 0x60:
+			status_con(3);
+		break;
+		case 0x63:
+			status_con(4);
+		break;
+		case 0x03:
+			status_con(5);
+		break;
+		case 0x33:
+			status_con(6);
+		break;
+		case 0x30:
+			status_con(7);
+		break;
+		case 0x36:
+			status_con(8);
+		break;
+		default :
+			status_con(0);
+		break;
+	}
+}
+void row_judge()
+{
+	int count2=0,count3=0;
+	if(before_status!=status&&!status)
+	{
+		before_status=status;
+		for(uint8_t i=0;i<4;i++)
+			count[i]=0;
+	}
+	else if((status&&before_status==0))
+	{
+		before_status=status;
+		count[0]=0;
+		count[1]=1;
+		all[0]=1;
+		all[1]=1;
+		for(uint8_t i=0;i<8;i++)
+		{
+			if(status==row[i])
+			{
+				count[0]=i;
+				break;
+			}
+		}
+	}
+	else if(count[1]==1&&status!=before_status)
+	{
+		before_status=status;
+		count[1]++;
+		count[2]=count[0]+1;
+		if(count[2]>7) count[2]=0;
+		if(row[count[2]]==status)
+		{
+			count[3]=0;
+			count[0]++;
+		}
+		count[2]=count[0]-1;
+		if(count[2]<0) count[2]=7;
+		if(row[count[2]]==status)
+		{
+			before_status=status;
+			count[3]=1;
+			count[0]--;
+		}
+		if(count[0]>7) count[0]=0;
+		if(count[0]<0) count[0]=7;
+	}
+	else if((count[1]>1)&&status!=before_status)
+	{
+		before_status=status;
+		if(count[3])
+		{
+			count[0]--;
+			if(count[0]<0) count[0]=7;
+			if(row[count[0]]==status)
+			count[1]++;
+		}
+		else if(!count[3])
+		{
+			count[0]++;
+			if(count[0]>7) count[0]=0;
+			if(row[count[0]]==status)
+			count[1]++;
+		}
+		else 
+		{
+			for(uint8_t i=0;i<4;i++)
+				count[i]=0;
+		}
+	}
+		
+	if(count[1]>7)
+	{
+		if(!count[3])
+		{
+			OLED_Start_Page_PageAddressing(2);
+			OLED_Start_Column_PageAddressing(0);
+			OLED_ShowRomChar(' ');
+			OLED_ShowRomChar(' ');
+			OLED_ShowRomChar('C');
+			OLED_ShowRomChar('W');
+		}
+		else
+		{
+			OLED_Start_Page_PageAddressing(2);
+			OLED_Start_Column_PageAddressing(0);
+			OLED_ShowRomChar(' ');
+			OLED_ShowRomChar('C');
+			OLED_ShowRomChar('C');
+			OLED_ShowRomChar('W');
+		}
+	}
+	else 
+	{
+		OLED_Start_Page_PageAddressing(2);
+		OLED_Start_Column_PageAddressing(0);
+		OLED_ShowRomChar('N');
+		OLED_ShowRomChar('O');
+		OLED_ShowRomChar('N');
+		OLED_ShowRomChar('E');
+	}
+}
+void task_a()
+{
+	if(mode!=before_mode)
+	{
+		before_mode=mode;
+		GPIOC->ODR=~0x80;
+		GPIOB->ODR=0x00;
+		TIM22->CCR1=0;
+		OLED_ShowRomString(0, "NTSC_48T: Electronics");
+		OLED_ShowRomString(1, "Competitor: 040404040");
+	}
+	if(HAL_GetTick()-tick[0]>200)
+	{
+		rtc_get();
+		sprintf(st,"System RTC: %02d:%02d:%02d ",sTime.Hours,sTime.Minutes,sTime.Seconds);
+		OLED_ShowRomString(2, st);
+		
+		adc_read();
+		for(uint8_t i=0;i<4;i++)
+		{
+			sprintf(st,"AIN%d: %4d[mV]       ",i,ain[i]*3300/4095);
+			OLED_ShowRomString(3+i, st);
+		}
+		
+		if(HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_2))
+			OLED_ShowRomString(7,"RPM:  NOT_BLANKED    ");
+		else
+			OLED_ShowRomString(7,"RPM:    BLANKED      ");
+		tick[0]=HAL_GetTick();
+	}
+}
+void task_b()
+{
+	if(mode!=before_mode)
+	{
+		before_mode=mode;
+		GPIOC->ODR=~0x40;
+		GPIOB->ODR=0x00;
+		TIM22->CCR1=0;
+		pwm=0;
+		rpm=0;
+		flag=0;
+		TIM22->CCR1=0;
+		OLED_ShowRomString(0, "Power GenEration Info");
+	}
+	if(HAL_GetTick()-tick[0]>100)
+	{
+		pwm_contron();
+		
+		adc_read();
+		sprintf(st,"Vout: %4d [mV]      ",(ain[2])*3300/4095);
+		OLED_ShowRomString(4,st);
+		sprintf(st,"Iout: %4d [mV]      ",(ain[3])*3300/4095/11);
+		OLED_ShowRomString(5,st);
+		
+		relay_contron();
+		
+		tick[0]=HAL_GetTick();
+	}
+	rpm_count();
+	
+}
+void task_c()
+{
+	if(mode!=before_mode)
+	{
+		before_mode=mode;
+		GPIOC->ODR=~0x20;
+		GPIOB->ODR=0x00;
+		OLED_ShowLogo();
+	}
+	if(HAL_GetTick()-tick[0]>200)
+	{
+		rtc_show();
+		status_show();
+		row_judge();
+		tick[0]=HAL_GetTick();
+	}
+}
+void task()
+{
+	switch(mode)
+	{
+		case 0:
+			task_a();
+		break;
+		case 1:
+			task_b();
+		break;
+		case 2:
+			task_c();
+		break;
+	}
+	
+}
+void sw()
+{
+	if(!HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_11))
+	{
+		mode++;
+		if(mode>2) mode=0;
+		while(!HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_11))
+		{
+			task();
+		}
+		HAL_Delay(50);
+	}
+}
+/* USER CODE END PFP */
+
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  *
+  * @retval None
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+	
+  /* USER CODE END 1 */
+
+  /* MCU Configuration----------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+	
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_TIM22_Init();
+  MX_RTC_Init();
+  MX_ADC_Init();
+  /* USER CODE BEGIN 2 */
+
+	HAL_TIM_Base_Start(&htim22);
+	HAL_TIM_PWM_Start(&htim22 , TIM_CHANNEL_1);
+
+
+	HAL_Delay(100);	//Wait for RTC Init
+	
+	HAL_GPIO_WritePin(GPIOC , GPIO_PIN_8 , GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOC , GPIO_PIN_7 , GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOC , GPIO_PIN_6 , GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOC , GPIO_PIN_5 , GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOC , GPIO_PIN_4 , GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOB , GPIO_PIN_1 , GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOB , GPIO_PIN_0 , GPIO_PIN_RESET);
+
+	OLED_Init();
+	HAL_Delay(1000);
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+		sw();
+		led_1();
+		task();
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
+		
+		
+  }
+  /* USER CODE END 3 */
+
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+
+  RCC_OscInitTypeDef RCC_OscInitStruct;
+  RCC_ClkInitTypeDef RCC_ClkInitStruct;
+  RCC_PeriphCLKInitTypeDef PeriphClkInit;
+
+    /**Configure the main internal regulator output voltage 
+    */
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+    /**Configure LSE Drive Capability 
+    */
+  HAL_PWR_EnableBkUpAccess();
+
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_HIGH);
+
+    /**Initializes the CPU, AHB and APB busses clocks 
+    */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSE
+                              |RCC_OSCILLATORTYPE_LSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = 16;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLLMUL_8;
+  RCC_OscInitStruct.PLL.PLLDIV = RCC_PLLDIV_2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+    /**Initializes the CPU, AHB and APB busses clocks 
+    */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+  PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSE;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+    /**Configure the Systick interrupt time 
+    */
+  HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq()/1000);
+
+    /**Configure the Systick 
+    */
+  HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
+
+  /* SysTick_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+}
+
+/* USER CODE BEGIN 4 */
+void Set_BCD_Hour(char hour)
+{
+  RTC_TimeTypeDef sTime;	
+	HAL_RTC_GetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+	sTime.Hours = hour;
+	HAL_RTC_SetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+}
+
+
+void Set_BCD_Min(char min)
+{
+  RTC_TimeTypeDef sTime;	
+	HAL_RTC_GetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+	sTime.Minutes = min;
+	HAL_RTC_SetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+}	
+
+void Set_BCD_Sec(char sec)
+{
+  RTC_TimeTypeDef sTime;	
+	HAL_RTC_GetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+	sTime.Seconds = sec;
+	HAL_RTC_SetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+}
+
+
+
+char Get_BCD_Hour(void)
+{
+  RTC_TimeTypeDef sTime;	
+	char hour;	
+	HAL_RTC_GetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+	hour = sTime.Hours;
+	return hour;
+}
+
+
+char Get_BCD_Min(void)
+{
+  RTC_TimeTypeDef sTime;	
+	char min;	
+	HAL_RTC_GetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+	min = sTime.Minutes;
+	return min;		
+}	
+
+char Get_BCD_Sec(void)
+{
+  RTC_TimeTypeDef sTime;	
+	char sec;	
+	HAL_RTC_GetTime(&hrtc , &sTime , RTC_FORMAT_BCD);
+	sec = sTime.Seconds;
+	return sec;	
+}
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @param  file: The file name as string.
+  * @param  line: The line in file as a number.
+  * @retval None
+  */
+void _Error_Handler(char *file, int line)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  while(1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t* file, uint32_t line)
+{ 
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
+
+/**
+  * @}
+  */
+
+/**
+  * @}
+  */
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

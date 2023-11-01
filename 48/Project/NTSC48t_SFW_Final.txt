@@ -1,0 +1,69 @@
+Configuration	NTSC48t_SFW_Final
+STM32CubeMX 	4.26.0
+Date	07/05/2018
+MCU	STM32L052R8Tx
+
+
+
+PERIPHERALS	MODES	FUNCTIONS	PINS
+RCC	Crystal/Ceramic Resonator	RCC_OSC_IN	PH0-OSC_IN
+RCC	Crystal/Ceramic Resonator	RCC_OSC_OUT	PH1-OSC_OUT
+RCC	Crystal/Ceramic Resonator	RCC_OSC32_IN	PC14-OSC32_IN
+RCC	Crystal/Ceramic Resonator	RCC_OSC32_OUT	PC15-OSC32_OUT
+RTC	Activate RTC Clock Source	RTC_VS_RTC_Activate	VP_RTC_VS_RTC_Activate
+RTC	RTC Enabled	RTC_VS_RTC_Calendar	VP_RTC_VS_RTC_Calendar
+SYS	SysTick	SYS_VS_Systick	VP_SYS_VS_Systick
+TIM22	Internal Clock	TIM22_VS_ClockSourceINT	VP_TIM22_VS_ClockSourceINT
+TIM22	PWM Generation CH1	TIM22_CH1	PA6
+
+
+
+Pin Nb	PINs	FUNCTIONs	LABELs
+3	PC14-OSC32_IN	RCC_OSC32_IN	
+4	PC15-OSC32_OUT	RCC_OSC32_OUT	
+5	PH0-OSC_IN	RCC_OSC_IN	
+6	PH1-OSC_OUT	RCC_OSC_OUT	
+8	PC0	GPIO_Output	OLED_CS
+9	PC1	GPIO_Output	OLED_DC
+10	PC2	GPIO_Output	OLED_RST
+11	PC3	GPIO_Output	OLED_SDA
+22	PA6	TIM22_CH1	
+24	PC4	GPIO_Output	OLED_SCK
+25	PC5	GPIO_Output	
+26	PB0	GPIO_Output	
+27	PB1	GPIO_Output	
+28	PB2	GPIO_Input	
+37	PC6	GPIO_Output	
+38	PC7	GPIO_Output	
+39	PC8	GPIO_Output	
+40	PC9	GPIO_Input	
+51	PC10	GPIO_Input	
+52	PC11	GPIO_Input	
+
+
+
+SOFTWARE PROJECT
+
+Project Settings : 
+Project Name : NTSC48t_SFW_Final
+Project Folder : D:\技能競賽資料\題本原檔與競賽資料\NTSC_第48屆全國賽\CompetitionFiles\Shared Files\Embedded Syetem Programming\Project
+Toolchain / IDE : MDK-ARM V5
+Firmware Package Name and Version : STM32Cube FW_L0 V1.10.0
+
+
+Code Generation Settings : 
+STM32Cube Firmware Library Package : Copy all used libraries into the project folder
+Generate peripheral initialization as a pair of '.c/.h' files per peripheral : Yes
+Backup previously generated files when re-generating : No
+Delete previously generated files when not re-generated : Yes
+Set all free pins as analog (to optimize the power consumption) : No
+
+
+Toolchains Settings : 
+Compiler Optimizations : Balanced Size/Speed
+
+
+
+
+
+
